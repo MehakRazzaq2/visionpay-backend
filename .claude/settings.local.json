@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload)",
+      "Bash(curl -s http://127.0.0.1:8000/)",
+      "Bash(flutter doctor *)",
+      "Bash(flutter run *)",
+      "Bash(java -version)",
+      "Bash(where java *)",
+      "Read(//c/Program Files/Android/Android Studio/jbr/bin/**)",
+      "Bash(java -version -cp \"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\\\\bin\")",
+      "Bash(\"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\\\\bin\\\\java.exe\" -version)",
+      "PowerShell(Remove-Item -Recurse -Force \"$env:USERPROFILE\\\\.gradle\\\\caches\\\\8.9\\\\transforms\" -ErrorAction SilentlyContinue; Write-Output \"Cache cleared\")",
+      "PowerShell(Remove-Item -Recurse -Force \"$env:USERPROFILE\\\\.gradle\\\\caches\\\\8.9\" -ErrorAction SilentlyContinue; Write-Output \"Done\")",
+      "Bash(./gradlew clean *)"
+    ]
+  }
+}
