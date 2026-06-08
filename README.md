@@ -1,8 +1,8 @@
 ---
 title: VisionPay API
 emoji: 🛒
-colorFrom: teal
-colorTo: green
+colorFrom: green
+colorTo: blue
 sdk: docker
 app_port: 7860
 pinned: false
