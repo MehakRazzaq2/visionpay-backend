@@ -32,7 +32,7 @@ class DecisionEngine:
             else:
                 product_info = {
                     'name': class_name,
-                    'brand': ocr_data.get('brand', 'Unknown'),
+                    'brand': ocr_data.get('brand', 'Unknown') if ocr_data else 'Unknown',
                     'weight_based': False,
                     'price_per_unit': 0,
                     'status': 'not_found'
@@ -43,12 +43,12 @@ class DecisionEngine:
         return results
     
     def _find_product(self, class_name, ocr_data):
-        if ocr_data.get('brand'):
+        if ocr_data and ocr_data.get('brand'):
             result = self.db.get_product_by_name(ocr_data['brand'])
             if result:
                 return result
-        
-        if ocr_data.get('product_name'):
+
+        if ocr_data and ocr_data.get('product_name'):
             result = self.db.get_product_by_name(ocr_data['product_name'])
             if result:
                 return result
