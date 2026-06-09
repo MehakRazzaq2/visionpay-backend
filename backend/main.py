@@ -158,27 +158,37 @@ async def detect_products(file: UploadFile = File(...)):
     try:
         results = model.predict(temp_path, conf=0.55, iou=0.45, verbose=False)
         image = cv2.imread(temp_path)
-        
+        img_area = image.shape[0] * image.shape[1]
+
         detected_products = []
         for r in results:
             for box in r.boxes:
                 cls = int(box.cls)
                 conf = float(box.conf)
                 class_name = model.names[cls]
-                
+
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+                # Skip tiny detections (less than 1% of image area)
+                box_area = (x2 - x1) * (y2 - y1)
+                if box_area < img_area * 0.01:
+                    continue
+
                 cropped = image[y1:y2, x1:x2]
                 ocr_data = ocr.extract_text(cropped) if ocr else None
-                
+
                 detected_products.append({
                     'class_name': class_name,
                     'confidence': round(conf, 2),
                     'ocr_data': ocr_data,
                     'bbox': [x1, y1, x2, y2]
                 })
-        
+
         processed = decision_engine.process_detected_products(detected_products)
-        
+
+        # Only keep products found in DB — filter out unknown detections
+        processed = [p for p in processed if p.get('status') != 'not_found']
+
         # Stock remark add karo
         for product in processed:
             if product.get('id'):
