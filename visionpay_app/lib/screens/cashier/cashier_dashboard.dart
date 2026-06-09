@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../theme/colors.dart';
 import '../login_screen.dart';
 import 'package:camera/camera.dart';
@@ -14,16 +16,20 @@ class CashierDashboard extends StatefulWidget {
 }
 
 class _CashierDashboardState extends State<CashierDashboard> {
-  List<Map<String, dynamic>> _cartItems = [];
+  final List<Map<String, dynamic>> _cartItems = [];
   bool _isDetecting = false;
   String _statusMessage = 'Ready — Place products in front of camera';
   Color _statusColor = const Color(0xFF6B7280);
-  final String _apiBase = 'http://192.168.0.111:8000';
+  final String _apiBase = 'https://mehakrazzaq2-visionpay-api.hf.space';
+  final String _weightBase = 'http://localhost:8001';
 
   // Camera
   CameraController? _cameraController;
   List<CameraDescription>? _cameras;
   bool _cameraInitialized = false;
+
+  // WebSocket
+  WebSocketChannel? _wsChannel;
 
   double get _cartTotal =>
       _cartItems.fold(0, (sum, item) => sum + (item['total'] as double));
@@ -31,13 +37,33 @@ class _CashierDashboardState extends State<CashierDashboard> {
   @override
   void initState() {
     super.initState();
-    _initCamera();
+    if (!kIsWeb) _initCamera();
+    _connectWebSocket();
   }
 
   @override
   void dispose() {
     _cameraController?.dispose();
+    _wsChannel?.sink.close();
     super.dispose();
+  }
+
+  void _connectWebSocket() {
+    try {
+      final wsUrl = _apiBase.replaceFirst('https://', 'wss://').replaceFirst('http://', 'ws://');
+      _wsChannel = WebSocketChannel.connect(Uri.parse('$wsUrl/ws'));
+      _wsChannel!.stream.listen((msg) {
+        final data = json.decode(msg as String);
+        if (data['type'] == 'products_detected') {
+          final products = List<Map<String, dynamic>>.from(data['products']);
+          if (mounted) _handleDetectedProducts(products);
+        }
+      }, onDone: () {
+        Future.delayed(const Duration(seconds: 3), _connectWebSocket);
+      }, onError: (_) {
+        Future.delayed(const Duration(seconds: 3), _connectWebSocket);
+      });
+    } catch (_) {}
   }
 
   Future<void> _initCamera() async {
@@ -108,9 +134,31 @@ class _CashierDashboardState extends State<CashierDashboard> {
         _statusMessage = '❌ Detection failed!';
         _statusColor = const Color(0xFFDC2626);
       });
+      _showErrorSnack('Server unreachable — check your internet connection');
     } finally {
       setState(() => _isDetecting = false);
     }
+  }
+
+  void _showErrorSnack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Row(
+        children: [
+          const Icon(Icons.wifi_off, color: Colors.white, size: 18),
+          const SizedBox(width: 10),
+          Expanded(child: Text(msg, style: const TextStyle(color: Colors.white))),
+        ],
+      ),
+      backgroundColor: const Color(0xFFDC2626),
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      duration: const Duration(seconds: 4),
+      action: SnackBarAction(
+        label: 'Dismiss',
+        textColor: Colors.white70,
+        onPressed: () => ScaffoldMessenger.of(context).hideCurrentSnackBar(),
+      ),
+    ));
   }
 
   void _showMockDetectionResult() {
@@ -199,7 +247,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
       {bool isManual = false}) {
     final weightController = TextEditingController();
     final pricePerKg = (product['price_per_kg'] ?? 0).toDouble();
-    String _unit = 'kg';
+    String unit = 'kg';
 
     showModalBottomSheet(
       context: context,
@@ -210,17 +258,16 @@ class _CashierDashboardState extends State<CashierDashboard> {
           double weightKg = 0;
           if (weightController.text.isNotEmpty) {
             final raw = double.tryParse(weightController.text) ?? 0;
-            weightKg = _unit == 'g' ? raw / 1000 : raw;
+            weightKg = unit == 'g' ? raw / 1000 : raw;
           }
           final previewTotal = pricePerKg * weightKg;
 
           return Container(
             padding: EdgeInsets.only(
                 bottom: MediaQuery.of(context).viewInsets.bottom),
-            decoration: BoxDecoration(
+            decoration: const BoxDecoration(
               color: AppColors.white,
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(24)),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
             ),
             child: Padding(
               padding: const EdgeInsets.all(24),
@@ -230,7 +277,8 @@ class _CashierDashboardState extends State<CashierDashboard> {
                 children: [
                   Center(
                     child: Container(
-                      width: 40, height: 4,
+                      width: 40,
+                      height: 4,
                       decoration: BoxDecoration(
                           color: AppColors.border,
                           borderRadius: BorderRadius.circular(2)),
@@ -240,14 +288,15 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   Row(
                     children: [
                       Container(
-                        width: 48, height: 48,
+                        width: 48,
+                        height: 48,
                         decoration: BoxDecoration(
                           color: AppColors.gold.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
                               color: AppColors.gold.withOpacity(0.3)),
                         ),
-                        child: Icon(Icons.scale,
+                        child: const Icon(Icons.scale,
                             color: AppColors.gold, size: 24),
                       ),
                       const SizedBox(width: 14),
@@ -255,12 +304,12 @@ class _CashierDashboardState extends State<CashierDashboard> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(product['name'],
-                              style: TextStyle(
+                              style: const TextStyle(
                                   fontSize: 17,
                                   fontWeight: FontWeight.bold,
                                   color: AppColors.textPrimary)),
                           Text('Rs $pricePerKg per kg',
-                              style: TextStyle(
+                              style: const TextStyle(
                                   fontSize: 13,
                                   color: AppColors.textSecondary)),
                         ],
@@ -270,35 +319,41 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   const SizedBox(height: 20),
                   Row(
                     children: [
-                      Text('Unit: ',
+                      const Text('Unit: ',
                           style: TextStyle(
                               fontSize: 13,
                               color: AppColors.textPrimary,
                               fontWeight: FontWeight.w600)),
                       const SizedBox(width: 8),
-                      _unitBtn('kg', _unit, () => setS(() {
-                            _unit = 'kg';
-                            weightController.clear();
-                          })),
+                      _unitBtn(
+                          'kg',
+                          unit,
+                          () => setS(() {
+                                unit = 'kg';
+                                weightController.clear();
+                              })),
                       const SizedBox(width: 8),
-                      _unitBtn('g', _unit, () => setS(() {
-                            _unit = 'g';
-                            weightController.clear();
-                          })),
+                      _unitBtn(
+                          'g',
+                          unit,
+                          () => setS(() {
+                                unit = 'g';
+                                weightController.clear();
+                              })),
                       const Spacer(),
                       if (isManual)
-                        Text('Manual Entry',
+                        const Text('Manual Entry',
                             style: TextStyle(
                                 fontSize: 11, color: AppColors.accent)),
                       if (!isManual)
-                        Text('Load Cell',
+                        const Text('Load Cell',
                             style: TextStyle(
                                 fontSize: 11, color: AppColors.success)),
                     ],
                   ),
                   const SizedBox(height: 12),
-                  Text('Enter Weight ($_unit)',
-                      style: TextStyle(
+                  Text('Enter Weight ($unit)',
+                      style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
                           color: AppColors.textPrimary)),
@@ -310,8 +365,8 @@ class _CashierDashboardState extends State<CashierDashboard> {
                     autofocus: true,
                     onChanged: (v) => setS(() {}),
                     decoration: InputDecoration(
-                      hintText: _unit == 'kg' ? 'e.g. 0.5' : 'e.g. 500',
-                      suffixText: _unit,
+                      hintText: unit == 'kg' ? 'e.g. 0.5' : 'e.g. 500',
+                      suffixText: unit,
                       filled: true,
                       fillColor: AppColors.background,
                       border: OutlineInputBorder(
@@ -320,10 +375,50 @@ class _CashierDashboardState extends State<CashierDashboard> {
                               color: AppColors.border.withOpacity(0.3))),
                       focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide:
-                              BorderSide(color: AppColors.primary, width: 2)),
+                          borderSide: const BorderSide(
+                              color: AppColors.primary, width: 2)),
                     ),
                   ),
+                  if (kIsWeb) ...[
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.scale, size: 16),
+                        label: const Text('Read from Scale'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.primary,
+                          side: const BorderSide(color: AppColors.primary),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () async {
+                          try {
+                            final res = await http
+                                .get(Uri.parse('$_weightBase/weight'))
+                                .timeout(const Duration(seconds: 4));
+                            final d = json.decode(res.body);
+                            final g = (d['weight_g'] as num).toDouble();
+                            if (g > 0) {
+                              setS(() {
+                                unit = 'g';
+                                weightController.text = g.toStringAsFixed(0);
+                              });
+                            }
+                          } catch (_) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Scale not connected — run weight_service.py'),
+                                backgroundColor: Colors.red,
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                    ),
+                  ],
                   if (weightController.text.isNotEmpty && weightKg > 0) ...[
                     const SizedBox(height: 14),
                     Container(
@@ -339,12 +434,12 @@ class _CashierDashboardState extends State<CashierDashboard> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text('Weight',
+                              const Text('Weight',
                                   style: TextStyle(
                                       color: AppColors.textSecondary,
                                       fontSize: 12)),
                               Text('${weightKg.toStringAsFixed(3)} kg',
-                                  style: TextStyle(
+                                  style: const TextStyle(
                                       color: AppColors.textPrimary,
                                       fontWeight: FontWeight.w600,
                                       fontSize: 12)),
@@ -354,12 +449,12 @@ class _CashierDashboardState extends State<CashierDashboard> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text('Rate',
+                              const Text('Rate',
                                   style: TextStyle(
                                       color: AppColors.textSecondary,
                                       fontSize: 12)),
                               Text('Rs $pricePerKg/kg',
-                                  style: TextStyle(
+                                  style: const TextStyle(
                                       color: AppColors.textPrimary,
                                       fontSize: 12)),
                             ],
@@ -368,11 +463,11 @@ class _CashierDashboardState extends State<CashierDashboard> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text('Total Price',
+                              const Text('Total Price',
                                   style: TextStyle(
                                       color: AppColors.textSecondary)),
                               Text('Rs ${previewTotal.toStringAsFixed(2)}',
-                                  style: TextStyle(
+                                  style: const TextStyle(
                                       fontSize: 18,
                                       fontWeight: FontWeight.bold,
                                       color: AppColors.primary)),
@@ -391,8 +486,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
                         if (weightController.text.isEmpty) return;
                         final raw = double.tryParse(weightController.text);
                         if (raw == null || raw <= 0) return;
-                        final weightKgFinal =
-                            _unit == 'g' ? raw / 1000 : raw;
+                        final weightKgFinal = unit == 'g' ? raw / 1000 : raw;
                         Navigator.pop(context);
                         _addToCart(
                           name: product['name'],
@@ -448,8 +542,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
             style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color:
-                    isSelected ? Colors.white : AppColors.textSecondary)),
+                color: isSelected ? Colors.white : AppColors.textSecondary)),
       ),
     );
   }
@@ -458,9 +551,9 @@ class _CashierDashboardState extends State<CashierDashboard> {
   void _showManualEntry() {
     final nameCtrl = TextEditingController();
     final qtyCtrl = TextEditingController();
-    Map<String, dynamic>? _foundProduct;
-    bool _searching = false;
-    String _error = '';
+    Map<String, dynamic>? foundProduct;
+    bool searching = false;
+    String error = '';
 
     showModalBottomSheet(
       context: context,
@@ -468,12 +561,11 @@ class _CashierDashboardState extends State<CashierDashboard> {
       backgroundColor: Colors.transparent,
       builder: (context) => StatefulBuilder(
         builder: (context, setS) => Container(
-          padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom),
-          decoration: BoxDecoration(
+          padding:
+              EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+          decoration: const BoxDecoration(
             color: AppColors.white,
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(24)),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
           ),
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -483,18 +575,19 @@ class _CashierDashboardState extends State<CashierDashboard> {
               children: [
                 Center(
                   child: Container(
-                    width: 40, height: 4,
+                    width: 40,
+                    height: 4,
                     decoration: BoxDecoration(
                         color: AppColors.border,
                         borderRadius: BorderRadius.circular(2)),
                   ),
                 ),
                 const SizedBox(height: 20),
-                Row(
+                const Row(
                   children: [
                     Icon(Icons.edit_outlined,
                         color: AppColors.primary, size: 22),
-                    const SizedBox(width: 8),
+                    SizedBox(width: 8),
                     Text('Manual Entry',
                         style: TextStyle(
                             fontSize: 18,
@@ -503,7 +596,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   ],
                 ),
                 const SizedBox(height: 20),
-                Text('Product Name',
+                const Text('Product Name',
                     style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
@@ -513,9 +606,9 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   controller: nameCtrl,
                   decoration: InputDecoration(
                     hintText: 'e.g. Tomato, CocoMo, Lays...',
-                    hintStyle: TextStyle(
+                    hintStyle: const TextStyle(
                         color: AppColors.textSecondary, fontSize: 13),
-                    prefixIcon: Icon(Icons.search,
+                    prefixIcon: const Icon(Icons.search,
                         color: AppColors.primary, size: 20),
                     filled: true,
                     fillColor: AppColors.background,
@@ -525,16 +618,16 @@ class _CashierDashboardState extends State<CashierDashboard> {
                             color: AppColors.border.withOpacity(0.3))),
                     focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide:
-                            BorderSide(color: AppColors.primary, width: 2)),
+                        borderSide: const BorderSide(
+                            color: AppColors.primary, width: 2)),
                   ),
                   onChanged: (_) => setS(() {
-                    _foundProduct = null;
-                    _error = '';
+                    foundProduct = null;
+                    error = '';
                   }),
                 ),
                 const SizedBox(height: 12),
-                Text('Weight (kg/g) or Quantity',
+                const Text('Weight (kg/g) or Quantity',
                     style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
@@ -546,9 +639,9 @@ class _CashierDashboardState extends State<CashierDashboard> {
                       const TextInputType.numberWithOptions(decimal: true),
                   decoration: InputDecoration(
                     hintText: 'e.g. 0.5 or 500g or 1',
-                    hintStyle: TextStyle(
+                    hintStyle: const TextStyle(
                         color: AppColors.textSecondary, fontSize: 13),
-                    prefixIcon: Icon(Icons.scale_outlined,
+                    prefixIcon: const Icon(Icons.scale_outlined,
                         color: AppColors.gold, size: 20),
                     filled: true,
                     fillColor: AppColors.background,
@@ -558,29 +651,29 @@ class _CashierDashboardState extends State<CashierDashboard> {
                             color: AppColors.border.withOpacity(0.3))),
                     focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide:
-                            BorderSide(color: AppColors.primary, width: 2)),
+                        borderSide: const BorderSide(
+                            color: AppColors.primary, width: 2)),
                   ),
                   onChanged: (_) => setS(() {}),
                 ),
-                if (_foundProduct != null) ...[
+                if (foundProduct != null) ...[
                   const SizedBox(height: 14),
                   Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: AppColors.primary.withOpacity(0.05),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                          color: AppColors.primary.withOpacity(0.2)),
+                      border:
+                          Border.all(color: AppColors.primary.withOpacity(0.2)),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
+                        const Row(
                           children: [
                             Icon(Icons.check_circle,
                                 color: AppColors.success, size: 16),
-                            const SizedBox(width: 6),
+                            SizedBox(width: 6),
                             Text('Product Found!',
                                 style: TextStyle(
                                     color: AppColors.success,
@@ -589,38 +682,35 @@ class _CashierDashboardState extends State<CashierDashboard> {
                           ],
                         ),
                         const SizedBox(height: 8),
-                        Text(_foundProduct!['name'] ?? '',
-                            style: TextStyle(
+                        Text(foundProduct!['name'] ?? '',
+                            style: const TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: AppColors.textPrimary,
                                 fontSize: 14)),
                         const SizedBox(height: 4),
                         Text(
-                          _foundProduct!['weight_based'] == true
-                              ? 'Rs ${_foundProduct!['price_per_kg']}/kg'
-                              : 'Rs ${_foundProduct!['price_per_unit']}/piece',
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: AppColors.textSecondary),
+                          foundProduct!['weight_based'] == true
+                              ? 'Rs ${foundProduct!['price_per_kg']}/kg'
+                              : 'Rs ${foundProduct!['price_per_unit']}/piece',
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.textSecondary),
                         ),
                         if (qtyCtrl.text.isNotEmpty) ...[
                           const Divider(height: 12),
                           Builder(builder: (context) {
                             final raw = double.tryParse(qtyCtrl.text
-                                    .replaceAll(
-                                        RegExp(r'[^0-9.]'), '')) ??
+                                    .replaceAll(RegExp(r'[^0-9.]'), '')) ??
                                 0;
-                            final isGrams = qtyCtrl.text
-                                .toLowerCase()
-                                .contains('g');
+                            final isGrams =
+                                qtyCtrl.text.toLowerCase().contains('g');
                             final isWeight =
-                                _foundProduct!['weight_based'] == true;
+                                foundProduct!['weight_based'] == true;
                             double total = 0;
                             String detail = '';
                             if (isWeight) {
                               final kg = isGrams ? raw / 1000 : raw;
                               final pricePerKg =
-                                  (_foundProduct!['price_per_kg'] ?? 0)
+                                  (foundProduct!['price_per_kg'] ?? 0)
                                       .toDouble();
                               total = pricePerKg * kg;
                               detail =
@@ -628,21 +718,20 @@ class _CashierDashboardState extends State<CashierDashboard> {
                             } else {
                               final qty = raw.toInt();
                               final pricePerUnit =
-                                  (_foundProduct!['price_per_unit'] ?? 0)
+                                  (foundProduct!['price_per_unit'] ?? 0)
                                       .toDouble();
                               total = pricePerUnit * qty;
                               detail = '$qty × Rs $pricePerUnit';
                             }
                             return Row(
-                              mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(detail,
-                                    style: TextStyle(
+                                    style: const TextStyle(
                                         fontSize: 12,
                                         color: AppColors.textSecondary)),
                                 Text('Rs ${total.toStringAsFixed(0)}',
-                                    style: TextStyle(
+                                    style: const TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.bold,
                                         color: AppColors.primary)),
@@ -654,23 +743,23 @@ class _CashierDashboardState extends State<CashierDashboard> {
                     ),
                   ),
                 ],
-                if (_error.isNotEmpty) ...[
+                if (error.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
                       color: AppColors.error.withOpacity(0.06),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                          color: AppColors.error.withOpacity(0.2)),
+                      border:
+                          Border.all(color: AppColors.error.withOpacity(0.2)),
                     ),
                     child: Row(
                       children: [
-                        Icon(Icons.error_outline,
+                        const Icon(Icons.error_outline,
                             color: AppColors.error, size: 16),
                         const SizedBox(width: 8),
-                        Text(_error,
-                            style: TextStyle(
+                        Text(error,
+                            style: const TextStyle(
                                 color: AppColors.error, fontSize: 12)),
                       ],
                     ),
@@ -681,24 +770,23 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton.icon(
-                    onPressed: _searching
+                    onPressed: searching
                         ? null
                         : () async {
                             final name = nameCtrl.text.trim();
                             final qtyText = qtyCtrl.text.trim();
                             if (name.isEmpty) {
-                              setS(() =>
-                                  _error = 'Please enter product name');
+                              setS(() => error = 'Please enter product name');
                               return;
                             }
                             if (qtyText.isEmpty) {
-                              setS(() => _error =
-                                  'Please enter weight or quantity');
+                              setS(() =>
+                                  error = 'Please enter weight or quantity');
                               return;
                             }
                             setS(() {
-                              _searching = true;
-                              _error = '';
+                              searching = true;
+                              error = '';
                             });
                             try {
                               final res = await http.get(Uri.parse(
@@ -707,99 +795,80 @@ class _CashierDashboardState extends State<CashierDashboard> {
                                 final data = json.decode(res.body);
                                 if (data['product'] != null) {
                                   setS(() {
-                                    _foundProduct =
-                                        Map<String, dynamic>.from(
-                                            data['product']);
-                                    _searching = false;
+                                    foundProduct = Map<String, dynamic>.from(
+                                        data['product']);
+                                    searching = false;
                                   });
                                   if (qtyText.isNotEmpty) {
                                     final raw = double.tryParse(
                                             qtyText.replaceAll(
-                                                RegExp(r'[^0-9.]'),
-                                                '')) ??
+                                                RegExp(r'[^0-9.]'), '')) ??
                                         0;
-                                    final isGrams = qtyText
-                                        .toLowerCase()
-                                        .contains('g');
+                                    final isGrams =
+                                        qtyText.toLowerCase().contains('g');
                                     final isWeight =
-                                        _foundProduct![
-                                                'weight_based'] ==
-                                            true;
+                                        foundProduct!['weight_based'] == true;
                                     if (isWeight) {
-                                      final kg =
-                                          isGrams ? raw / 1000 : raw;
+                                      final kg = isGrams ? raw / 1000 : raw;
                                       final pricePerKg =
-                                          (_foundProduct![
-                                                      'price_per_kg'] ??
-                                                  0)
+                                          (foundProduct!['price_per_kg'] ?? 0)
                                               .toDouble();
                                       Navigator.pop(context);
                                       _addToCart(
-                                        name: _foundProduct!['name'],
-                                        brand:
-                                            _foundProduct!['brand'] ??
-                                                '',
+                                        name: foundProduct!['name'],
+                                        brand: foundProduct!['brand'] ?? '',
                                         price: pricePerKg,
                                         isWeight: true,
                                         weightKg: kg,
-                                        productId: _foundProduct!['id'],
+                                        productId: foundProduct!['id'],
                                       );
                                     } else {
                                       final qty = raw.toInt();
                                       final pricePerUnit =
-                                          (_foundProduct![
-                                                      'price_per_unit'] ??
-                                                  0)
+                                          (foundProduct!['price_per_unit'] ?? 0)
                                               .toDouble();
                                       Navigator.pop(context);
                                       for (int i = 0; i < qty; i++) {
                                         _addToCart(
-                                          name: _foundProduct!['name'],
-                                          brand:
-                                              _foundProduct!['brand'] ??
-                                                  '',
+                                          name: foundProduct!['name'],
+                                          brand: foundProduct!['brand'] ?? '',
                                           price: pricePerUnit,
                                           isWeight: false,
-                                          productId:
-                                              _foundProduct!['id'],
+                                          productId: foundProduct!['id'],
                                         );
                                       }
                                     }
                                     setState(() {
                                       _statusMessage =
-                                          '✅ Added: ${_foundProduct!['name']}';
+                                          '✅ Added: ${foundProduct!['name']}';
                                       _statusColor = AppColors.success;
                                     });
                                   }
                                 } else {
                                   setS(() {
-                                    _error =
+                                    error =
                                         'Product "$name" not found in database';
-                                    _searching = false;
+                                    searching = false;
                                   });
                                 }
                               }
                             } catch (e) {
                               setS(() {
-                                _error =
-                                    'Connection error — check server';
-                                _searching = false;
+                                error = 'Connection error — check server';
+                                searching = false;
                               });
                             }
                           },
-                    icon: _searching
+                    icon: searching
                         ? const SizedBox(
                             width: 18,
                             height: 18,
                             child: CircularProgressIndicator(
                                 color: Colors.white, strokeWidth: 2))
-                        : const Icon(Icons.check_circle_outline,
-                            size: 18),
-                    label: Text(
-                        _searching ? 'Searching...' : 'Process',
+                        : const Icon(Icons.check_circle_outline, size: 18),
+                    label: Text(searching ? 'Searching...' : 'Process',
                         style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold)),
+                            fontSize: 15, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
@@ -821,8 +890,8 @@ class _CashierDashboardState extends State<CashierDashboard> {
   // ── Barcode ───────────────────────────────────────────────────────────────
   void _showBarcodeEntry() {
     final barcodeCtrl = TextEditingController();
-    bool _searching = false;
-    String _error = '';
+    bool searching = false;
+    String error = '';
 
     showModalBottomSheet(
       context: context,
@@ -830,12 +899,11 @@ class _CashierDashboardState extends State<CashierDashboard> {
       backgroundColor: Colors.transparent,
       builder: (context) => StatefulBuilder(
         builder: (context, setS) => Container(
-          padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom),
-          decoration: BoxDecoration(
+          padding:
+              EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+          decoration: const BoxDecoration(
             color: AppColors.white,
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(24)),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
           ),
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -845,18 +913,19 @@ class _CashierDashboardState extends State<CashierDashboard> {
               children: [
                 Center(
                   child: Container(
-                    width: 40, height: 4,
+                    width: 40,
+                    height: 4,
                     decoration: BoxDecoration(
                         color: AppColors.border,
                         borderRadius: BorderRadius.circular(2)),
                   ),
                 ),
                 const SizedBox(height: 20),
-                Row(
+                const Row(
                   children: [
                     Icon(Icons.qr_code_scanner,
                         color: AppColors.primary, size: 24),
-                    const SizedBox(width: 10),
+                    SizedBox(width: 10),
                     Text('Barcode Lookup',
                         style: TextStyle(
                             fontSize: 18,
@@ -872,35 +941,35 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   decoration: InputDecoration(
                     labelText: 'Enter or Scan Barcode',
                     prefixIcon:
-                        Icon(Icons.qr_code, color: AppColors.primary),
+                        const Icon(Icons.qr_code, color: AppColors.primary),
                     filled: true,
                     fillColor: AppColors.background,
                     border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12)),
                     focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide:
-                            BorderSide(color: AppColors.primary, width: 2)),
+                        borderSide: const BorderSide(
+                            color: AppColors.primary, width: 2)),
                   ),
                   onSubmitted: (v) async {
                     setS(() {
-                      _searching = true;
-                      _error = '';
+                      searching = true;
+                      error = '';
                     });
                     await _lookupBarcode(
                         v,
                         context,
                         setS,
                         (err) => setS(() {
-                              _error = err;
-                              _searching = false;
+                              error = err;
+                              searching = false;
                             }));
                   },
                 ),
-                if (_error.isNotEmpty) ...[
+                if (error.isNotEmpty) ...[
                   const SizedBox(height: 8),
-                  Text(_error,
-                      style: TextStyle(
+                  Text(error,
+                      style: const TextStyle(
                           color: AppColors.error, fontSize: 12)),
                 ],
                 const SizedBox(height: 16),
@@ -908,20 +977,20 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton(
-                    onPressed: _searching
+                    onPressed: searching
                         ? null
                         : () async {
                             setS(() {
-                              _searching = true;
-                              _error = '';
+                              searching = true;
+                              error = '';
                             });
                             await _lookupBarcode(
                                 barcodeCtrl.text,
                                 context,
                                 setS,
                                 (err) => setS(() {
-                                      _error = err;
-                                      _searching = false;
+                                      error = err;
+                                      searching = false;
                                     }));
                           },
                     style: ElevatedButton.styleFrom(
@@ -929,9 +998,10 @@ class _CashierDashboardState extends State<CashierDashboard> {
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
                     ),
-                    child: _searching
+                    child: searching
                         ? const SizedBox(
-                            width: 20, height: 20,
+                            width: 20,
+                            height: 20,
                             child: CircularProgressIndicator(
                                 color: Colors.white, strokeWidth: 2))
                         : const Text('Lookup',
@@ -950,15 +1020,15 @@ class _CashierDashboardState extends State<CashierDashboard> {
     );
   }
 
-  Future<void> _lookupBarcode(String barcode, BuildContext ctx,
-      Function setS, Function(String) onError) async {
+  Future<void> _lookupBarcode(String barcode, BuildContext ctx, Function setS,
+      Function(String) onError) async {
     if (barcode.trim().isEmpty) {
       onError('Please enter a barcode');
       return;
     }
     try {
-      final response = await http
-          .get(Uri.parse('$_apiBase/product/barcode/$barcode'));
+      final response =
+          await http.get(Uri.parse('$_apiBase/product/barcode/$barcode'));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['product'] != null) {
@@ -1008,15 +1078,17 @@ class _CashierDashboardState extends State<CashierDashboard> {
         Uri.parse('$_apiBase/generate-bill'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
-          'products': _cartItems.map((item) => {
-                'name': item['name'],
-                'brand': item['brand'],
-                'weight_based': item['is_weight'],
-                'price_per_unit': item['is_weight'] ? 0 : item['price'],
-                'price_per_kg': item['is_weight'] ? item['price'] : 0,
-                'weight_kg': item['weight_kg'],
-                'quantity': 1,
-              }).toList(),
+          'products': _cartItems
+              .map((item) => {
+                    'name': item['name'],
+                    'brand': item['brand'],
+                    'weight_based': item['is_weight'],
+                    'price_per_unit': item['is_weight'] ? 0 : item['price'],
+                    'price_per_kg': item['is_weight'] ? item['price'] : 0,
+                    'weight_kg': item['weight_kg'],
+                    'quantity': 1,
+                  })
+              .toList(),
         }),
       );
 
@@ -1056,8 +1128,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
     showDialog(
       context: context,
       builder: (context) => Dialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         child: Container(
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
@@ -1072,11 +1143,8 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                        colors: [
-                          AppColors.primary,
-                          const Color(0xFF0D5C56)
-                        ]),
+                    gradient: const LinearGradient(
+                        colors: [AppColors.primary, Color(0xFF0D5C56)]),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Column(
@@ -1111,7 +1179,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   ),
                   child: Column(
                     children: [
-                      Row(
+                      const Row(
                         children: [
                           Expanded(
                               child: Text('Item',
@@ -1128,8 +1196,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
                       ),
                       const Divider(height: 10),
                       ..._cartItems.map((item) => Padding(
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 4),
+                            padding: const EdgeInsets.symmetric(vertical: 4),
                             child: Row(
                               children: [
                                 Expanded(
@@ -1138,24 +1205,23 @@ class _CashierDashboardState extends State<CashierDashboard> {
                                         CrossAxisAlignment.start,
                                     children: [
                                       Text(item['name'],
-                                          style: TextStyle(
+                                          style: const TextStyle(
                                               fontSize: 12,
                                               color: AppColors.textPrimary,
-                                              fontWeight:
-                                                  FontWeight.w500)),
+                                              fontWeight: FontWeight.w500)),
                                       if (item['is_weight'] == true)
                                         Text(
                                             '${item['weight_kg']?.toStringAsFixed(3)}kg × Rs ${item['price']}',
-                                            style: TextStyle(
+                                            style: const TextStyle(
                                                 fontSize: 10,
-                                                color: AppColors
-                                                    .textSecondary)),
+                                                color:
+                                                    AppColors.textSecondary)),
                                     ],
                                   ),
                                 ),
                                 Text(
                                     'Rs ${(item['total'] as double).toStringAsFixed(0)}',
-                                    style: TextStyle(
+                                    style: const TextStyle(
                                         fontWeight: FontWeight.w600,
                                         color: AppColors.primary,
                                         fontSize: 12)),
@@ -1167,24 +1233,24 @@ class _CashierDashboardState extends State<CashierDashboard> {
                 ),
                 const SizedBox(height: 10),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   decoration: BoxDecoration(
                     color: AppColors.primary.withOpacity(0.06),
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                        color: AppColors.primary.withOpacity(0.2)),
+                    border:
+                        Border.all(color: AppColors.primary.withOpacity(0.2)),
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('TOTAL',
+                      const Text('TOTAL',
                           style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 16,
                               color: AppColors.textPrimary)),
                       Text('Rs ${_cartTotal.toStringAsFixed(0)}',
-                          style: TextStyle(
+                          style: const TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 22,
                               color: AppColors.primary)),
@@ -1192,7 +1258,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                Text('Thank you for shopping!',
+                const Text('Thank you for shopping!',
                     style: TextStyle(
                         fontSize: 12, color: AppColors.textSecondary)),
                 const SizedBox(height: 16),
@@ -1201,17 +1267,15 @@ class _CashierDashboardState extends State<CashierDashboard> {
                     Expanded(
                       child: OutlinedButton.icon(
                         onPressed: () => Navigator.pop(context),
-                        icon: Icon(Icons.print_outlined,
+                        icon: const Icon(Icons.print_outlined,
                             size: 16, color: AppColors.primary),
-                        label: Text('Print',
-                            style:
-                                TextStyle(color: AppColors.primary)),
+                        label: const Text('Print',
+                            style: TextStyle(color: AppColors.primary)),
                         style: OutlinedButton.styleFrom(
-                          side: BorderSide(color: AppColors.primary),
+                          side: const BorderSide(color: AppColors.primary),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
-                          padding:
-                              const EdgeInsets.symmetric(vertical: 12),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
                       ),
                     ),
@@ -1233,8 +1297,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
                           foregroundColor: Colors.white,
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
-                          padding:
-                              const EdgeInsets.symmetric(vertical: 12),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
                       ),
                     ),
@@ -1255,10 +1318,10 @@ class _CashierDashboardState extends State<CashierDashboard> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(label,
-              style: TextStyle(
+              style: const TextStyle(
                   fontSize: 12, color: AppColors.textSecondary)),
           Text(value,
-              style: TextStyle(
+              style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                   color: AppColors.textPrimary)),
@@ -1306,26 +1369,26 @@ class _CashierDashboardState extends State<CashierDashboard> {
       title: Row(
         children: [
           Container(
-            width: 34, height: 34,
+            width: 34,
+            height: 34,
             decoration: BoxDecoration(
-              gradient: LinearGradient(
+              gradient: const LinearGradient(
                   colors: [AppColors.primary, AppColors.accent]),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Icon(Icons.visibility,
-                color: Colors.white, size: 17),
+            child: const Icon(Icons.visibility, color: Colors.white, size: 17),
           ),
           const SizedBox(width: 10),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('VisionPay',
+              const Text('VisionPay',
                   style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.bold,
                       color: AppColors.textPrimary)),
               Text('Cashier: ${widget.fullName}',
-                  style: TextStyle(
+                  style: const TextStyle(
                       fontSize: 10, color: AppColors.textSecondary)),
             ],
           ),
@@ -1338,18 +1401,17 @@ class _CashierDashboardState extends State<CashierDashboard> {
           decoration: BoxDecoration(
             color: AppColors.success.withOpacity(0.1),
             borderRadius: BorderRadius.circular(20),
-            border:
-                Border.all(color: AppColors.success.withOpacity(0.3)),
+            border: Border.all(color: AppColors.success.withOpacity(0.3)),
           ),
           child: Row(
             children: [
               Container(
-                  width: 6, height: 6,
-                  decoration: BoxDecoration(
-                      color: AppColors.success,
-                      shape: BoxShape.circle)),
+                  width: 6,
+                  height: 6,
+                  decoration: const BoxDecoration(
+                      color: AppColors.success, shape: BoxShape.circle)),
               const SizedBox(width: 5),
-              Text('Online',
+              const Text('Online',
                   style: TextStyle(
                       fontSize: 11,
                       color: AppColors.success,
@@ -1358,7 +1420,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
           ),
         ),
         IconButton(
-          icon: Icon(Icons.logout, color: AppColors.error),
+          icon: const Icon(Icons.logout, color: AppColors.error),
           onPressed: () => Navigator.pushAndRemoveUntil(
             context,
             MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -1375,15 +1437,16 @@ class _CashierDashboardState extends State<CashierDashboard> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         color: _statusColor.withOpacity(0.08),
-        border: Border(
-            bottom: BorderSide(color: _statusColor.withOpacity(0.2))),
+        border:
+            Border(bottom: BorderSide(color: _statusColor.withOpacity(0.2))),
       ),
       child: Row(
         children: [
           Container(
-              width: 8, height: 8,
-              decoration: BoxDecoration(
-                  color: _statusColor, shape: BoxShape.circle)),
+              width: 8,
+              height: 8,
+              decoration:
+                  BoxDecoration(color: _statusColor, shape: BoxShape.circle)),
           const SizedBox(width: 8),
           Text(_statusMessage,
               style: TextStyle(
@@ -1413,23 +1476,20 @@ class _CashierDashboardState extends State<CashierDashboard> {
         children: [
           // Header
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: const BoxDecoration(
               gradient: LinearGradient(
-                  colors: [AppColors.primary, const Color(0xFF0D5C56)]),
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(16)),
+                  colors: [AppColors.primary, Color(0xFF0D5C56)]),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
+                const Row(
                   children: [
-                    const Icon(Icons.camera_alt,
-                        color: Colors.white, size: 16),
-                    const SizedBox(width: 6),
-                    const Text('Camera Feed',
+                    Icon(Icons.camera_alt, color: Colors.white, size: 16),
+                    SizedBox(width: 6),
+                    Text('Camera Feed',
                         style: TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
@@ -1437,8 +1497,8 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   ],
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: Colors.white.withOpacity(0.2),
                     borderRadius: BorderRadius.circular(10),
@@ -1446,15 +1506,15 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   child: Row(
                     children: [
                       Container(
-                          width: 6, height: 6,
+                          width: 6,
+                          height: 6,
                           decoration: BoxDecoration(
                               color: _cameraInitialized
                                   ? const Color(0xFF4ADE80)
                                   : Colors.orange,
                               shape: BoxShape.circle)),
                       const SizedBox(width: 4),
-                      Text(
-                          _cameraInitialized ? 'LIVE' : 'NO CAM',
+                      Text(_cameraInitialized ? 'LIVE' : 'NO CAM',
                           style: const TextStyle(
                               color: Colors.white,
                               fontSize: 10,
@@ -1474,8 +1534,10 @@ class _CashierDashboardState extends State<CashierDashboard> {
                       child: FittedBox(
                         fit: BoxFit.cover,
                         child: SizedBox(
-                          width: _cameraController!.value.previewSize?.height ?? 1920,
-                          height: _cameraController!.value.previewSize?.width ?? 1080,
+                          width: _cameraController!.value.previewSize?.height ??
+                              1920,
+                          height: _cameraController!.value.previewSize?.width ??
+                              1080,
                           child: CameraPreview(_cameraController!),
                         ),
                       ),
@@ -1491,8 +1553,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(Icons.camera_alt_outlined,
-                            size: 56,
-                            color: Colors.white.withOpacity(0.2)),
+                            size: 56, color: Colors.white.withOpacity(0.2)),
                         const SizedBox(height: 10),
                         Text('Camera Initializing...',
                             style: TextStyle(
@@ -1500,13 +1561,11 @@ class _CashierDashboardState extends State<CashierDashboard> {
                                 fontWeight: FontWeight.w600,
                                 color: Colors.white.withOpacity(0.5))),
                         const SizedBox(height: 4),
-                        Text(
-                            'Allow camera permission\nif prompted',
+                        Text('Allow camera permission\nif prompted',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                                 fontSize: 11,
-                                color:
-                                    Colors.white.withOpacity(0.3))),
+                                color: Colors.white.withOpacity(0.3))),
                       ],
                     ),
                   ),
@@ -1521,20 +1580,17 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   width: double.infinity,
                   height: 44,
                   child: ElevatedButton.icon(
-                    onPressed:
-                        _isDetecting ? null : _captureAndDetect,
+                    onPressed: _isDetecting ? null : _captureAndDetect,
                     icon: _isDetecting
                         ? const SizedBox(
-                            width: 18, height: 18,
+                            width: 18,
+                            height: 18,
                             child: CircularProgressIndicator(
                                 color: Colors.white, strokeWidth: 2))
                         : const Icon(Icons.camera_alt, size: 18),
                     label: Text(
-                        _isDetecting
-                            ? 'Detecting...'
-                            : 'Capture & Detect',
-                        style: const TextStyle(
-                            fontWeight: FontWeight.bold)),
+                        _isDetecting ? 'Detecting...' : 'Capture & Detect',
+                        style: const TextStyle(fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
@@ -1556,12 +1612,10 @@ class _CashierDashboardState extends State<CashierDashboard> {
                         style: OutlinedButton.styleFrom(
                           foregroundColor: AppColors.primary,
                           side: BorderSide(
-                              color:
-                                  AppColors.primary.withOpacity(0.6)),
+                              color: AppColors.primary.withOpacity(0.6)),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8)),
-                          padding:
-                              const EdgeInsets.symmetric(vertical: 8),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
                         ),
                       ),
                     ),
@@ -1578,8 +1632,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
                               color: AppColors.gold.withOpacity(0.6)),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8)),
-                          padding:
-                              const EdgeInsets.symmetric(vertical: 8),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
                         ),
                       ),
                     ),
@@ -1610,23 +1663,20 @@ class _CashierDashboardState extends State<CashierDashboard> {
       child: Column(
         children: [
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                  colors: [AppColors.gold, const Color(0xFFE08B00)]),
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(16)),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: const BoxDecoration(
+              gradient:
+                  LinearGradient(colors: [AppColors.gold, Color(0xFFE08B00)]),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
+                const Row(
                   children: [
-                    const Icon(Icons.shopping_cart,
-                        color: Colors.white, size: 16),
-                    const SizedBox(width: 6),
-                    const Text('Cart',
+                    Icon(Icons.shopping_cart, color: Colors.white, size: 16),
+                    SizedBox(width: 6),
+                    Text('Cart',
                         style: TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
@@ -1634,8 +1684,8 @@ class _CashierDashboardState extends State<CashierDashboard> {
                   ],
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: Colors.white.withOpacity(0.2),
                     borderRadius: BorderRadius.circular(10),
@@ -1656,13 +1706,11 @@ class _CashierDashboardState extends State<CashierDashboard> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(Icons.shopping_cart_outlined,
-                            size: 40,
-                            color: AppColors.gold.withOpacity(0.3)),
+                            size: 40, color: AppColors.gold.withOpacity(0.3)),
                         const SizedBox(height: 8),
-                        Text('Cart is empty',
+                        const Text('Cart is empty',
                             style: TextStyle(
-                                color: AppColors.textSecondary,
-                                fontSize: 12)),
+                                color: AppColors.textSecondary, fontSize: 12)),
                       ],
                     ),
                   )
@@ -1678,18 +1726,17 @@ class _CashierDashboardState extends State<CashierDashboard> {
                           color: AppColors.background,
                           borderRadius: BorderRadius.circular(10),
                           border: Border.all(
-                              color:
-                                  AppColors.border.withOpacity(0.3)),
+                              color: AppColors.border.withOpacity(0.3)),
                         ),
                         child: Row(
                           children: [
                             Container(
-                              width: 32, height: 32,
+                              width: 32,
+                              height: 32,
                               decoration: BoxDecoration(
                                 color: item['is_weight']
                                     ? AppColors.gold.withOpacity(0.15)
-                                    : AppColors.primary
-                                        .withOpacity(0.1),
+                                    : AppColors.primary.withOpacity(0.1),
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: Icon(
@@ -1705,11 +1752,10 @@ class _CashierDashboardState extends State<CashierDashboard> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(item['name'],
-                                      style: TextStyle(
+                                      style: const TextStyle(
                                           fontWeight: FontWeight.w600,
                                           fontSize: 12,
                                           color: AppColors.textPrimary)),
@@ -1717,7 +1763,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
                                     item['is_weight']
                                         ? '${item['weight_kg']?.toStringAsFixed(3)}kg'
                                         : item['brand'],
-                                    style: TextStyle(
+                                    style: const TextStyle(
                                         fontSize: 10,
                                         color: AppColors.textSecondary),
                                   ),
@@ -1729,14 +1775,14 @@ class _CashierDashboardState extends State<CashierDashboard> {
                               children: [
                                 Text(
                                     'Rs ${(item['total'] as double).toStringAsFixed(0)}',
-                                    style: TextStyle(
+                                    style: const TextStyle(
                                         fontWeight: FontWeight.bold,
                                         color: AppColors.primary,
                                         fontSize: 12)),
                                 GestureDetector(
-                                  onTap: () => setState(() =>
-                                      _cartItems.removeAt(index)),
-                                  child: Icon(Icons.close,
+                                  onTap: () => setState(
+                                      () => _cartItems.removeAt(index)),
+                                  child: const Icon(Icons.close,
                                       size: 14, color: AppColors.error),
                                 ),
                               ],
@@ -1754,49 +1800,44 @@ class _CashierDashboardState extends State<CashierDashboard> {
               borderRadius:
                   const BorderRadius.vertical(bottom: Radius.circular(16)),
               border: Border(
-                  top: BorderSide(
-                      color: AppColors.border.withOpacity(0.3))),
+                  top: BorderSide(color: AppColors.border.withOpacity(0.3))),
             ),
             child: Column(
               children: [
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('Items',
+                    const Text('Items',
                         style: TextStyle(
-                            fontSize: 11,
-                            color: AppColors.textSecondary)),
+                            fontSize: 11, color: AppColors.textSecondary)),
                     Text('${_cartItems.length}',
-                        style: TextStyle(
+                        style: const TextStyle(
                             fontSize: 11, color: AppColors.textPrimary)),
                   ],
                 ),
                 const SizedBox(height: 3),
-                Row(
+                const Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text('Tax (0%)',
                         style: TextStyle(
-                            fontSize: 11,
-                            color: AppColors.textSecondary)),
+                            fontSize: 11, color: AppColors.textSecondary)),
                     Text('Rs 0',
                         style: TextStyle(
-                            fontSize: 11,
-                            color: AppColors.textSecondary)),
+                            fontSize: 11, color: AppColors.textSecondary)),
                   ],
                 ),
-                Divider(
-                    color: AppColors.border.withOpacity(0.3), height: 12),
+                Divider(color: AppColors.border.withOpacity(0.3), height: 12),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('TOTAL',
+                    const Text('TOTAL',
                         style: TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 14,
                             color: AppColors.textPrimary)),
                     Text('Rs ${_cartTotal.toStringAsFixed(0)}',
-                        style: TextStyle(
+                        style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 16,
                             color: AppColors.primary)),
@@ -1810,35 +1851,32 @@ class _CashierDashboardState extends State<CashierDashboard> {
                           ? null
                           : () => setState(() => _cartItems.clear()),
                       style: OutlinedButton.styleFrom(
-                        side: BorderSide(
-                            color: AppColors.error.withOpacity(0.4)),
+                        side:
+                            BorderSide(color: AppColors.error.withOpacity(0.4)),
                         foregroundColor: AppColors.error,
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8)),
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 8),
                       ),
-                      child: const Text('Clear',
-                          style: TextStyle(fontSize: 12)),
+                      child:
+                          const Text('Clear', style: TextStyle(fontSize: 12)),
                     ),
                     const SizedBox(width: 6),
                     Expanded(
                       child: ElevatedButton(
-                        onPressed:
-                            _cartItems.isEmpty ? null : _generateBill,
+                        onPressed: _cartItems.isEmpty ? null : _generateBill,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primary,
                           foregroundColor: Colors.white,
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8)),
-                          padding:
-                              const EdgeInsets.symmetric(vertical: 10),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
                           elevation: 0,
                         ),
                         child: const Text('Generate Bill',
                             style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12)),
+                                fontWeight: FontWeight.bold, fontSize: 12)),
                       ),
                     ),
                   ],

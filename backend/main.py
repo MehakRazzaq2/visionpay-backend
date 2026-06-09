@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -58,12 +58,95 @@ db_path = os.environ.get("DB_PATH", "visionpay.db")
 db = ProductDatabase(db_path)
 decision_engine = DecisionEngine(db)
 billing = BillingEngine()
+
+# Weight service (local only — Arduino on same machine as server)
+import threading, time
+try:
+    import serial as pyserial
+    _weight_g = 0.0
+    _scale_connected = False
+    _weight_lock = threading.Lock()
+
+    def _read_weight_serial():
+        global _weight_g, _scale_connected
+        port = os.environ.get("ARDUINO_PORT", "COM3")
+        while True:
+            try:
+                ser = pyserial.Serial(port, 9600, timeout=2)
+                _scale_connected = True
+                while True:
+                    line = ser.readline().decode('utf-8').strip()
+                    if line.startswith("WEIGHT:"):
+                        try:
+                            with _weight_lock:
+                                _weight_g = float(line.split(":")[1])
+                        except ValueError:
+                            pass
+            except Exception:
+                _scale_connected = False
+                time.sleep(3)
+
+    threading.Thread(target=_read_weight_serial, daemon=True).start()
+    print("Weight serial reader started ✅")
+except ImportError:
+    _weight_g = 0.0
+    _scale_connected = False
+    _weight_lock = threading.Lock()
+    print("pyserial not installed — weight endpoint will return 0")
+
 print("All modules loaded! ✅")
+
+
+# ── WebSocket Manager ─────────────────────────────────────────────────────────
+class _WsManager:
+    def __init__(self):
+        self._clients: list = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self._clients.append(ws)
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self._clients:
+            self._clients.remove(ws)
+
+    async def broadcast(self, data: dict):
+        dead = []
+        for ws in self._clients:
+            try:
+                await ws.send_json(data)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self._clients.remove(ws)
+
+ws_manager = _WsManager()
+
+
+@app.websocket("/ws")
+async def ws_endpoint(ws: WebSocket):
+    await ws_manager.connect(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(ws)
 
 
 @app.get("/")
 def home():
     return {"message": "VisionPay API Running!", "status": "ok"}
+
+
+@app.get("/weight")
+def get_weight():
+    with _weight_lock:
+        w = _weight_g
+    return {
+        "weight_g": round(w, 1),
+        "weight_kg": round(w / 1000, 3),
+        "connected": _scale_connected
+    }
 
 
 @app.post("/detect")
@@ -101,12 +184,18 @@ async def detect_products(file: UploadFile = File(...)):
             if product.get('id'):
                 product['stock_remark'] = db.get_stock_remark(product['id'])
         
+        await ws_manager.broadcast({
+            "type": "products_detected",
+            "products": processed,
+            "count": len(processed)
+        })
+
         return {
             "status": "success",
             "detected_count": len(processed),
             "products": processed
         }
-    
+
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
