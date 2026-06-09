@@ -156,7 +156,7 @@ async def detect_products(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, f)
     
     try:
-        results = model.predict(temp_path, conf=0.15, iou=0.45, verbose=False)
+        results = model.predict(temp_path, conf=0.55, iou=0.45, verbose=False)
         image = cv2.imread(temp_path)
         
         detected_products = []
@@ -216,7 +216,7 @@ async def checkout(file: UploadFile = File(...)):
     
     try:
         # Step 1 - YOLO detect
-        results = model.predict(temp_path, conf=0.15, verbose=False)
+        results = model.predict(temp_path, conf=0.55, verbose=False)
         image = cv2.imread(temp_path)
         
         detected_products = []
