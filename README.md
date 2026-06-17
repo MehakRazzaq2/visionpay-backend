@@ -202,7 +202,7 @@ items_json, payment_method, status
 | Nimrah | Team Member |
 | Mehak | Team Member |
 
-**Institute:** Khawaja Freed Institute of Computer Science & Information Technology (KICSIT)
+**Institute:** Khan Institute of Computer Science & Information Technology (KICSIT)
 **Batch:** 2022–2026
 
 ---
