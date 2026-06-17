@@ -59,39 +59,49 @@ db = ProductDatabase(db_path)
 decision_engine = DecisionEngine(db)
 billing = BillingEngine()
 
-# Weight service (local only — Arduino on same machine as server)
+# ── Arduino / Weight Scale ────────────────────────────────────────────────────
 import threading, time
+_weight_g = 0.0
+_scale_connected = False
+_weight_lock = threading.Lock()
+_arduino_serial = None
+
 try:
-    import serial as pyserial
-    _weight_g = 0.0
-    _scale_connected = False
-    _weight_lock = threading.Lock()
+    import serial as _pyserial
+    import serial.tools.list_ports as _list_ports
+
+    def _find_arduino_port():
+        for p in _list_ports.comports():
+            desc = p.description or ''
+            if any(k in desc for k in ('Arduino', 'CH340', 'USB Serial', 'USB-SERIAL')):
+                return p.device
+        return os.environ.get("ARDUINO_PORT", "COM3")
 
     def _read_weight_serial():
-        global _weight_g, _scale_connected
-        port = os.environ.get("ARDUINO_PORT", "COM3")
+        global _weight_g, _scale_connected, _arduino_serial
         while True:
             try:
-                ser = pyserial.Serial(port, 9600, timeout=2)
+                port = _find_arduino_port()
+                _arduino_serial = _pyserial.Serial(port, 9600, timeout=2)
+                print(f"Arduino connected on {port} ✅")
                 _scale_connected = True
                 while True:
-                    line = ser.readline().decode('utf-8').strip()
+                    line = _arduino_serial.readline().decode('utf-8', errors='ignore').strip()
                     if line.startswith("WEIGHT:"):
                         try:
                             with _weight_lock:
                                 _weight_g = float(line.split(":")[1])
                         except ValueError:
                             pass
-            except Exception:
+            except Exception as e:
                 _scale_connected = False
-                time.sleep(3)
+                _arduino_serial = None
+                print(f"Arduino disconnected: {e} — retrying in 5s")
+                time.sleep(5)
 
     threading.Thread(target=_read_weight_serial, daemon=True).start()
     print("Weight serial reader started ✅")
 except ImportError:
-    _weight_g = 0.0
-    _scale_connected = False
-    _weight_lock = threading.Lock()
     print("pyserial not installed — weight endpoint will return 0")
 
 print("All modules loaded! ✅")
@@ -144,9 +154,24 @@ def get_weight():
         w = _weight_g
     return {
         "weight_g": round(w, 1),
+        "weight_grams": round(w, 1),
         "weight_kg": round(w / 1000, 3),
-        "connected": _scale_connected
+        "stable": _scale_connected and w > 0,
+        "connected": _scale_connected,
+        "scale_connected": _scale_connected,
     }
+
+
+@app.post("/weight/tare")
+def tare_scale():
+    global _arduino_serial
+    try:
+        if _arduino_serial and _arduino_serial.is_open:
+            _arduino_serial.write(b'T\n')
+            return {"status": "tared", "success": True}
+        return {"status": "Arduino not connected", "success": False}
+    except Exception as e:
+        return {"status": str(e), "success": False}
 
 
 @app.post("/detect")
@@ -321,7 +346,9 @@ def get_transactions():
             "total": t[3],
             "items_count": t[4],
             "timestamp": t[5],
-            "items_json": t[6]
+            "items_json": t[6],
+            "payment_method": t[7] if len(t) > 7 else "Cash",
+            "status": t[8] if len(t) > 8 else "Paid",
         })
     return {"transactions": result}
 
@@ -412,6 +439,8 @@ def save_transaction_api(data: dict):
         total=data['total'],
         items_count=data['items_count'],
         items_json=data['items_json'],
+        payment_method=data.get('payment_method', 'Cash'),
+        status=data.get('status', 'Paid'),
     )
     return {"status": "success"}
 

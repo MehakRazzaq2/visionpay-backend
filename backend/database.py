@@ -35,10 +35,19 @@ class ProductDatabase:
                 total REAL,
                 items_count INTEGER,
                 timestamp TEXT,
-                items_json TEXT
+                items_json TEXT,
+                payment_method TEXT DEFAULT 'Cash',
+                status TEXT DEFAULT 'Paid'
             )
         ''')
-        
+
+        # Migration: add new columns to existing databases
+        for col, default in [("payment_method", "'Cash'"), ("status", "'Paid'")]:
+            try:
+                cursor.execute(f"ALTER TABLE transactions ADD COLUMN {col} TEXT DEFAULT {default}")
+            except Exception:
+                pass  # column already exists
+
         conn.commit()
         conn.close()
         print("Database initialized! ✅")
@@ -126,12 +135,12 @@ class ProductDatabase:
         conn.close()
         return results
 
-    def update_stock(self, product_id, new_quantity):
+    def update_stock(self, product_id, add_quantity):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE products SET quantity=? WHERE id=?",
-            (new_quantity, product_id)
+            "UPDATE products SET quantity = MAX(0, quantity + ?) WHERE id=?",
+            (add_quantity, product_id)
         )
         conn.commit()
         conn.close()
@@ -165,14 +174,17 @@ class ProductDatabase:
         else:
             return "🟢 In Stock"
 
-    def save_transaction(self, bill_id, cashier, total, items_count, items_json):
+    def save_transaction(self, bill_id, cashier, total, items_count, items_json,
+                         payment_method='Cash', status='Paid'):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO transactions (bill_id, cashier, total, items_count, timestamp, items_json)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO transactions (bill_id, cashier, total, items_count, timestamp,
+                                      items_json, payment_method, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (bill_id, cashier, total, items_count,
-              datetime.now().strftime("%d-%m-%Y %H:%M:%S"), items_json))
+              datetime.now().strftime("%d-%m-%Y %H:%M:%S"), items_json,
+              payment_method, status))
         conn.commit()
         conn.close()
 

@@ -23,8 +23,13 @@ class _LoginScreenState extends State<LoginScreen>
   late Animation<double> _cardAnimation;
 
   final Map<String, Map<String, String>> _users = {
-    'manager': {'password': 'manager123', 'role': 'manager', 'name': 'Store Manager'},
-    'cashier': {'password': 'cashier123', 'role': 'cashier', 'name': 'Cashier'},
+    'manager': {
+      'password': 'manager123',
+      'role': 'manager',
+      'name': 'Store Manager'
+    },
+    'cashier1': {'password': 'cashier123', 'role': 'cashier', 'name': 'Cashier One'},
+    'cashier2': {'password': 'cashier456', 'role': 'cashier', 'name': 'Cashier Two'},
   };
 
   @override
@@ -39,8 +44,8 @@ class _LoginScreenState extends State<LoginScreen>
       vsync: this,
       duration: const Duration(milliseconds: 800),
     );
-    _cardAnimation = CurvedAnimation(
-        parent: _cardController, curve: Curves.easeOutBack);
+    _cardAnimation =
+        CurvedAnimation(parent: _cardController, curve: Curves.easeOutBack);
     _cardController.forward();
   }
 
@@ -77,8 +82,9 @@ class _LoginScreenState extends State<LoginScreen>
           PageRouteBuilder(
             pageBuilder: (context, animation, secondaryAnimation) =>
                 ManagerDashboard(fullName: name),
-            transitionsBuilder: (context, animation, secondaryAnimation, child) =>
-                FadeTransition(opacity: animation, child: child),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) =>
+                    FadeTransition(opacity: animation, child: child),
             transitionDuration: const Duration(milliseconds: 500),
           ),
         );
@@ -88,8 +94,9 @@ class _LoginScreenState extends State<LoginScreen>
           PageRouteBuilder(
             pageBuilder: (context, animation, secondaryAnimation) =>
                 CashierDashboard(fullName: name),
-            transitionsBuilder: (context, animation, secondaryAnimation, child) =>
-                FadeTransition(opacity: animation, child: child),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) =>
+                    FadeTransition(opacity: animation, child: child),
             transitionDuration: const Duration(milliseconds: 500),
           ),
         );
@@ -192,12 +199,13 @@ class _LoginScreenState extends State<LoginScreen>
                       children: [
                         // Logo
                         Container(
-                          width: 64, height: 64,
+                          width: 64,
+                          height: 64,
                           decoration: BoxDecoration(
-                            gradient: LinearGradient(
+                            gradient: const LinearGradient(
                               colors: [
-                                const Color(0xFF0F766E),
-                                const Color(0xFF14B8A6),
+                                Color(0xFF0F766E),
+                                Color(0xFF14B8A6),
                               ],
                               begin: Alignment.topLeft,
                               end: Alignment.bottomRight,
@@ -205,7 +213,8 @@ class _LoginScreenState extends State<LoginScreen>
                             borderRadius: BorderRadius.circular(16),
                             boxShadow: [
                               BoxShadow(
-                                color: const Color(0xFF0F766E).withOpacity(0.35),
+                                color:
+                                    const Color(0xFF0F766E).withOpacity(0.35),
                                 blurRadius: 14,
                                 offset: const Offset(0, 5),
                               ),
@@ -223,8 +232,7 @@ class _LoginScreenState extends State<LoginScreen>
                         const SizedBox(height: 4),
                         Text('Sign in to continue',
                             style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey.shade500)),
+                                fontSize: 12, color: Colors.grey.shade500)),
                         const SizedBox(height: 24),
 
                         // Username
@@ -238,8 +246,9 @@ class _LoginScreenState extends State<LoginScreen>
                             hint: 'Enter username',
                             prefixIcon: Icons.person_outline,
                             suffix: PopupMenuButton<String>(
-                              icon: Icon(Icons.keyboard_arrow_down_rounded,
-                                  color: const Color(0xFF0F766E)),
+                              icon: const Icon(
+                                  Icons.keyboard_arrow_down_rounded,
+                                  color: Color(0xFF0F766E)),
                               shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(12)),
                               elevation: 4,
@@ -250,28 +259,38 @@ class _LoginScreenState extends State<LoginScreen>
                                 });
                               },
                               itemBuilder: (context) => [
-                                PopupMenuItem(
+                                const PopupMenuItem(
                                   value: 'manager',
                                   child: Row(
                                     children: [
                                       Icon(Icons.manage_accounts_outlined,
-                                          color: const Color(0xFF0F766E),
-                                          size: 18),
-                                      const SizedBox(width: 10),
-                                      const Text('manager',
+                                          color: Color(0xFF0F766E), size: 18),
+                                      SizedBox(width: 10),
+                                      Text('manager',
                                           style: TextStyle(fontSize: 13)),
                                     ],
                                   ),
                                 ),
-                                PopupMenuItem(
-                                  value: 'cashier',
+                                const PopupMenuItem(
+                                  value: 'cashier1',
                                   child: Row(
                                     children: [
                                       Icon(Icons.point_of_sale_outlined,
-                                          color: const Color(0xFF14B8A6),
-                                          size: 18),
-                                      const SizedBox(width: 10),
-                                      const Text('cashier',
+                                          color: Color(0xFF14B8A6), size: 18),
+                                      SizedBox(width: 10),
+                                      Text('cashier1',
+                                          style: TextStyle(fontSize: 13)),
+                                    ],
+                                  ),
+                                ),
+                                const PopupMenuItem(
+                                  value: 'cashier2',
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.point_of_sale_outlined,
+                                          color: Color(0xFF0F766E), size: 18),
+                                      SizedBox(width: 10),
+                                      Text('cashier2',
                                           style: TextStyle(fontSize: 13)),
                                     ],
                                   ),
@@ -351,7 +370,8 @@ class _LoginScreenState extends State<LoginScreen>
                             ),
                             child: _isLoading
                                 ? const SizedBox(
-                                    width: 20, height: 20,
+                                    width: 20,
+                                    height: 20,
                                     child: CircularProgressIndicator(
                                         color: Colors.white, strokeWidth: 2))
                                 : const Text('Sign In',
@@ -364,8 +384,7 @@ class _LoginScreenState extends State<LoginScreen>
                         const SizedBox(height: 14),
                         Text('VisionPay © 2026',
                             style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.grey.shade400)),
+                                fontSize: 11, color: Colors.grey.shade400)),
                       ],
                     ),
                   ),
@@ -414,13 +433,11 @@ class _LoginScreenState extends State<LoginScreen>
     return InputDecoration(
       hintText: hint,
       hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 13),
-      prefixIcon: Icon(prefixIcon,
-          color: const Color(0xFF0F766E), size: 18),
+      prefixIcon: Icon(prefixIcon, color: const Color(0xFF0F766E), size: 18),
       suffixIcon: suffix,
       filled: true,
       fillColor: const Color(0xFFF0FDFA),
-      contentPadding: const EdgeInsets.symmetric(
-          horizontal: 14, vertical: 13),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
         borderSide: BorderSide(color: Colors.grey.shade200),
@@ -431,8 +448,7 @@ class _LoginScreenState extends State<LoginScreen>
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(
-            color: Color(0xFF0F766E), width: 1.5),
+        borderSide: const BorderSide(color: Color(0xFF0F766E), width: 1.5),
       ),
     );
   }
@@ -446,11 +462,9 @@ class _LoginParticlePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     for (int i = 0; i < 18; i++) {
-      final x = (i * 0.137 * size.width +
-              progress * 0.08 * size.width) %
-          size.width;
-      final y = (i * 0.271 * size.height +
-              progress * 0.04 * size.height) %
+      final x =
+          (i * 0.137 * size.width + progress * 0.08 * size.width) % size.width;
+      final y = (i * 0.271 * size.height + progress * 0.04 * size.height) %
           size.height;
       final paint = Paint()
         ..color = Colors.white.withOpacity(0.04 + (i % 4) * 0.02)

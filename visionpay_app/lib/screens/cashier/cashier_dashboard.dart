@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../theme/colors.dart';
+import '../../config/app_config.dart';
 import '../login_screen.dart';
 import 'package:camera/camera.dart';
 
@@ -20,8 +23,8 @@ class _CashierDashboardState extends State<CashierDashboard> {
   bool _isDetecting = false;
   String _statusMessage = 'Ready — Place products in front of camera';
   Color _statusColor = const Color(0xFF6B7280);
-  final String _apiBase = 'https://mehakrazzaq2-visionpay-api.hf.space';
-  final String _weightBase = 'http://localhost:8001';
+  final String _apiBase = AppConfig.apiBase;
+  final String _weightBase = AppConfig.weightBase;
 
   // Camera
   CameraController? _cameraController;
@@ -30,6 +33,9 @@ class _CashierDashboardState extends State<CashierDashboard> {
 
   // WebSocket
   WebSocketChannel? _wsChannel;
+
+  // Weight scale
+  Timer? _weightTimer;
 
   double get _cartTotal =>
       _cartItems.fold(0, (sum, item) => sum + (item['total'] as double));
@@ -43,9 +49,15 @@ class _CashierDashboardState extends State<CashierDashboard> {
 
   @override
   void dispose() {
+    _weightTimer?.cancel();
     _cameraController?.dispose();
     _wsChannel?.sink.close();
     super.dispose();
+  }
+
+  void _stopLiveRead() {
+    _weightTimer?.cancel();
+    _weightTimer = null;
   }
 
   void _connectWebSocket() {
@@ -243,11 +255,15 @@ class _CashierDashboardState extends State<CashierDashboard> {
   }
 
   // ── Weight Dialog ─────────────────────────────────────────────────────────
-  void _showWeightDialog(Map<String, dynamic> product,
-      {bool isManual = false}) {
+  void _showWeightDialog(Map<String, dynamic> product) {
     final weightController = TextEditingController();
     final pricePerKg = (product['price_per_kg'] ?? 0).toDouble();
     String unit = 'kg';
+    bool scaleConnected = false;
+    bool scaleChecking = false;
+    bool liveMode = false;
+
+    bool autoChecked = false;
 
     showModalBottomSheet(
       context: context,
@@ -255,6 +271,32 @@ class _CashierDashboardState extends State<CashierDashboard> {
       backgroundColor: Colors.transparent,
       builder: (context) => StatefulBuilder(
         builder: (context, setS) {
+          // Auto-check scale once on first build
+          if (!autoChecked) {
+            autoChecked = true;
+            Future.microtask(() async {
+              try {
+                setS(() => scaleChecking = true);
+                final res = await http
+                    .get(Uri.parse('$_weightBase/weight'))
+                    .timeout(const Duration(seconds: 3));
+                final d = json.decode(res.body);
+                if (!context.mounted) return;
+                setS(() {
+                  scaleConnected =
+                      d['scale_connected'] == true || d['connected'] == true;
+                  scaleChecking = false;
+                });
+              } catch (_) {
+                if (!context.mounted) return;
+                setS(() {
+                  scaleConnected = false;
+                  scaleChecking = false;
+                });
+              }
+            });
+          }
+
           double weightKg = 0;
           if (weightController.text.isNotEmpty) {
             final raw = double.tryParse(weightController.text) ?? 0;
@@ -316,7 +358,61 @@ class _CashierDashboardState extends State<CashierDashboard> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 12),
+                  // Scale status indicator
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: scaleChecking
+                          ? Colors.orange.withOpacity(0.08)
+                          : scaleConnected
+                              ? AppColors.success.withOpacity(0.08)
+                              : AppColors.error.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: scaleChecking
+                            ? Colors.orange.withOpacity(0.3)
+                            : scaleConnected
+                                ? AppColors.success.withOpacity(0.3)
+                                : AppColors.error.withOpacity(0.2),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: scaleChecking
+                                ? Colors.orange
+                                : scaleConnected
+                                    ? AppColors.success
+                                    : AppColors.error,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          scaleChecking
+                              ? 'Connecting to scale...'
+                              : scaleConnected
+                                  ? 'Scale Connected'
+                                  : 'Scale Offline — Manual Entry',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: scaleChecking
+                                ? Colors.orange
+                                : scaleConnected
+                                    ? AppColors.success
+                                    : AppColors.error,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   Row(
                     children: [
                       const Text('Unit: ',
@@ -340,15 +436,6 @@ class _CashierDashboardState extends State<CashierDashboard> {
                                 unit = 'g';
                                 weightController.clear();
                               })),
-                      const Spacer(),
-                      if (isManual)
-                        const Text('Manual Entry',
-                            style: TextStyle(
-                                fontSize: 11, color: AppColors.accent)),
-                      if (!isManual)
-                        const Text('Load Cell',
-                            style: TextStyle(
-                                fontSize: 11, color: AppColors.success)),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -379,46 +466,170 @@ class _CashierDashboardState extends State<CashierDashboard> {
                               color: AppColors.primary, width: 2)),
                     ),
                   ),
-                  if (kIsWeb) ...[
-                    const SizedBox(height: 10),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        icon: const Icon(Icons.scale, size: 16),
-                        label: const Text('Read from Scale'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.primary,
-                          side: const BorderSide(color: AppColors.primary),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
+                  const SizedBox(height: 10),
+                  // Hardware buttons row
+                  Row(
+                    children: [
+                      // Read Scale
+                      Expanded(
+                        flex: 3,
+                        child: ElevatedButton.icon(
+                          icon: scaleChecking
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                      color: Colors.white, strokeWidth: 2))
+                              : const Icon(Icons.scale, size: 15),
+                          label: const Text('Read Scale',
+                              style: TextStyle(fontSize: 12)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                            elevation: 0,
+                          ),
+                          onPressed: scaleChecking
+                              ? null
+                              : () async {
+                                  setS(() => scaleChecking = true);
+                                  try {
+                                    final res = await http
+                                        .get(Uri.parse('$_weightBase/weight'))
+                                        .timeout(
+                                            const Duration(seconds: 4));
+                                    final d = json.decode(res.body);
+                                    final conn =
+                                        d['scale_connected'] == true ||
+                                            d['connected'] == true;
+                                    final wkg =
+                                        (d['weight_kg'] as num?)
+                                                ?.toDouble() ??
+                                            0.0;
+                                    if (!context.mounted) return;
+                                    setS(() {
+                                      scaleConnected = conn;
+                                      scaleChecking = false;
+                                      unit = 'kg';
+                                      weightController.text =
+                                          wkg.toStringAsFixed(3);
+                                    });
+                                  } catch (_) {
+                                    if (!context.mounted) return;
+                                    setS(() {
+                                      scaleConnected = false;
+                                      scaleChecking = false;
+                                    });
+                                  }
+                                },
                         ),
-                        onPressed: () async {
-                          try {
-                            final res = await http
-                                .get(Uri.parse('$_weightBase/weight'))
-                                .timeout(const Duration(seconds: 4));
-                            final d = json.decode(res.body);
-                            final g = (d['weight_g'] as num).toDouble();
-                            if (g > 0) {
-                              setS(() {
-                                unit = 'g';
-                                weightController.text = g.toStringAsFixed(0);
+                      ),
+                      const SizedBox(width: 8),
+                      // Live toggle
+                      Expanded(
+                        flex: 2,
+                        child: ElevatedButton.icon(
+                          icon: Icon(
+                              liveMode
+                                  ? Icons.stop_circle_outlined
+                                  : Icons.sync,
+                              size: 15),
+                          label: Text(liveMode ? 'Stop' : 'Live',
+                              style: const TextStyle(fontSize: 12)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: liveMode
+                                ? AppColors.error
+                                : AppColors.success,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                            elevation: 0,
+                          ),
+                          onPressed: () {
+                            if (liveMode) {
+                              _stopLiveRead();
+                              setS(() => liveMode = false);
+                            } else {
+                              setS(() => liveMode = true);
+                              _weightTimer = Timer.periodic(
+                                  const Duration(seconds: 1), (_) async {
+                                try {
+                                  final res = await http
+                                      .get(Uri.parse(
+                                          '$_weightBase/weight'))
+                                      .timeout(
+                                          const Duration(seconds: 2));
+                                  final d = json.decode(res.body);
+                                  final conn =
+                                      d['scale_connected'] == true ||
+                                          d['connected'] == true;
+                                  final wkg =
+                                      (d['weight_kg'] as num?)
+                                              ?.toDouble() ??
+                                          0.0;
+                                  if (!context.mounted) {
+                                    _stopLiveRead();
+                                    return;
+                                  }
+                                  setS(() {
+                                    scaleConnected = conn;
+                                    unit = 'kg';
+                                    weightController.text =
+                                        wkg.toStringAsFixed(3);
+                                  });
+                                } catch (_) {}
                               });
                             }
-                          } catch (_) {
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Scale not connected — run weight_service.py'),
-                                backgroundColor: Colors.red,
-                                behavior: SnackBarBehavior.floating,
-                              ),
-                            );
-                          }
-                        },
+                          },
+                        ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 8),
+                      // Tare
+                      Expanded(
+                        flex: 2,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.exposure_zero, size: 15),
+                          label: const Text('Tare',
+                              style: TextStyle(fontSize: 12)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.gold,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                            elevation: 0,
+                          ),
+                          onPressed: () async {
+                            try {
+                              await http
+                                  .post(Uri.parse('$_weightBase/weight/tare'))
+                                  .timeout(const Duration(seconds: 3));
+                              if (!context.mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Scale zeroed ✅'),
+                                  backgroundColor: AppColors.success,
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            } catch (_) {
+                              if (!context.mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Tare failed — scale offline'),
+                                  backgroundColor: AppColors.error,
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                   if (weightController.text.isNotEmpty && weightKg > 0) ...[
                     const SizedBox(height: 14),
                     Container(
@@ -487,6 +698,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
                         final raw = double.tryParse(weightController.text);
                         if (raw == null || raw <= 0) return;
                         final weightKgFinal = unit == 'g' ? raw / 1000 : raw;
+                        _stopLiveRead();
                         Navigator.pop(context);
                         _addToCart(
                           name: product['name'],
@@ -887,152 +1099,39 @@ class _CashierDashboardState extends State<CashierDashboard> {
     );
   }
 
-  // ── Barcode ───────────────────────────────────────────────────────────────
-  void _showBarcodeEntry() {
-    final barcodeCtrl = TextEditingController();
-    bool searching = false;
-    String error = '';
+  // ── Barcode Scanner ───────────────────────────────────────────────────────
+  Future<void> _showBarcodeEntry() async {
+    // Release main camera so mobile_scanner can use it
+    await _cameraController?.dispose();
+    _cameraController = null;
+    if (!mounted) return;
+    setState(() => _cameraInitialized = false);
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setS) => Container(
-          padding:
-              EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-          decoration: const BoxDecoration(
-            color: AppColors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                        color: AppColors.border,
-                        borderRadius: BorderRadius.circular(2)),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                const Row(
-                  children: [
-                    Icon(Icons.qr_code_scanner,
-                        color: AppColors.primary, size: 24),
-                    SizedBox(width: 10),
-                    Text('Barcode Lookup',
-                        style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary)),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                TextField(
-                  controller: barcodeCtrl,
-                  keyboardType: TextInputType.number,
-                  autofocus: true,
-                  decoration: InputDecoration(
-                    labelText: 'Enter or Scan Barcode',
-                    prefixIcon:
-                        const Icon(Icons.qr_code, color: AppColors.primary),
-                    filled: true,
-                    fillColor: AppColors.background,
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                    focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(
-                            color: AppColors.primary, width: 2)),
-                  ),
-                  onSubmitted: (v) async {
-                    setS(() {
-                      searching = true;
-                      error = '';
-                    });
-                    await _lookupBarcode(
-                        v,
-                        context,
-                        setS,
-                        (err) => setS(() {
-                              error = err;
-                              searching = false;
-                            }));
-                  },
-                ),
-                if (error.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(error,
-                      style: const TextStyle(
-                          color: AppColors.error, fontSize: 12)),
-                ],
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: ElevatedButton(
-                    onPressed: searching
-                        ? null
-                        : () async {
-                            setS(() {
-                              searching = true;
-                              error = '';
-                            });
-                            await _lookupBarcode(
-                                barcodeCtrl.text,
-                                context,
-                                setS,
-                                (err) => setS(() {
-                                      error = err;
-                                      searching = false;
-                                    }));
-                          },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                    ),
-                    child: searching
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                                color: Colors.white, strokeWidth: 2))
-                        : const Text('Lookup',
-                            style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white)),
-                  ),
-                ),
-                const SizedBox(height: 8),
-              ],
-            ),
-          ),
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _BarcodeScannerScreen(
+          onScanned: (code) => _lookupBarcodeFromScanner(code),
         ),
       ),
     );
+
+    // Reinitialize main camera after scanner closes
+    if (mounted) await _initCamera();
   }
 
-  Future<void> _lookupBarcode(String barcode, BuildContext ctx, Function setS,
-      Function(String) onError) async {
-    if (barcode.trim().isEmpty) {
-      onError('Please enter a barcode');
-      return;
-    }
+  Future<void> _lookupBarcodeFromScanner(String barcode) async {
+    if (barcode.trim().isEmpty) return;
+    setState(() {
+      _statusMessage = '🔍 Looking up barcode...';
+      _statusColor = AppColors.gold;
+    });
     try {
       final response =
           await http.get(Uri.parse('$_apiBase/product/barcode/$barcode'));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['product'] != null) {
-          Navigator.pop(ctx);
           final p = data['product'];
           final isWeight = p['weight_based'] == true;
           if (isWeight) {
@@ -1057,18 +1156,139 @@ class _CashierDashboardState extends State<CashierDashboard> {
             });
           }
         } else {
-          onError('Product not found for this barcode');
+          setState(() {
+            _statusMessage = '⚠️ Barcode not found in database';
+            _statusColor = AppColors.error;
+          });
+          _showErrorSnack('Product not found for barcode: $barcode');
         }
-      } else {
-        onError('Barcode lookup failed');
       }
     } catch (e) {
-      onError('Connection error — check server');
+      setState(() {
+        _statusMessage = '❌ Connection error';
+        _statusColor = AppColors.error;
+      });
+      _showErrorSnack('Connection error — check server');
     }
   }
 
+  // ── Payment Method Dialog ─────────────────────────────────────────────────
+  void _showPaymentMethodDialog() {
+    if (_cartItems.isEmpty) return;
+    String selected = 'Cash';
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setS) => Padding(
+          padding: EdgeInsets.fromLTRB(
+              20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                        color: AppColors.border,
+                        borderRadius: BorderRadius.circular(2))),
+              ),
+              const SizedBox(height: 16),
+              const Text('Select Payment Method',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textPrimary)),
+              const SizedBox(height: 4),
+              Text('Total: Rs ${_cartTotal.toStringAsFixed(0)}',
+                  style: const TextStyle(
+                      fontSize: 13, color: AppColors.textSecondary)),
+              const SizedBox(height: 16),
+              ...[
+                ('Cash', Icons.money_outlined),
+                ('Card', Icons.credit_card_outlined),
+                ('JazzCash', Icons.phone_android_outlined),
+                ('EasyPaisa', Icons.phone_android_outlined),
+              ].map((opt) {
+                final isSelected = selected == opt.$1;
+                return GestureDetector(
+                  onTap: () => setS(() => selected = opt.$1),
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 13),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? AppColors.primary.withOpacity(0.06)
+                          : AppColors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: isSelected
+                            ? AppColors.primary
+                            : AppColors.border.withOpacity(0.4),
+                        width: isSelected ? 1.5 : 1,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(opt.$2,
+                            color: isSelected
+                                ? AppColors.primary
+                                : AppColors.textSecondary,
+                            size: 22),
+                        const SizedBox(width: 12),
+                        Text(opt.$1,
+                            style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: isSelected
+                                    ? FontWeight.w600
+                                    : FontWeight.normal,
+                                color: isSelected
+                                    ? AppColors.primary
+                                    : AppColors.textPrimary)),
+                        const Spacer(),
+                        if (isSelected)
+                          const Icon(Icons.check_circle,
+                              color: AppColors.primary, size: 20),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+              const SizedBox(height: 6),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _generateBill(selected);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    elevation: 0,
+                  ),
+                  child: const Text('Confirm',
+                      style:
+                          TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   // ── Generate Bill ─────────────────────────────────────────────────────────
-  Future<void> _generateBill() async {
+  Future<void> _generateBill(String paymentMethod) async {
     if (_cartItems.isEmpty) return;
 
     try {
@@ -1101,6 +1321,8 @@ class _CashierDashboardState extends State<CashierDashboard> {
           'total': _cartTotal,
           'items_count': _cartItems.length,
           'items_json': json.encode(_cartItems),
+          'payment_method': paymentMethod,
+          'status': 'Paid',
         }),
       );
 
@@ -1114,13 +1336,13 @@ class _CashierDashboardState extends State<CashierDashboard> {
         }
       }
 
-      _showReceiptDialog(billId);
+      _showReceiptDialog(billId, paymentMethod);
     } catch (e) {
-      _showReceiptDialog('VP-${DateTime.now().millisecondsSinceEpoch}');
+      _showReceiptDialog('VP-${DateTime.now().millisecondsSinceEpoch}', paymentMethod);
     }
   }
 
-  void _showReceiptDialog(String billId) {
+  void _showReceiptDialog(String billId, String paymentMethod) {
     final now = DateTime.now();
     final timeStr =
         '${now.day.toString().padLeft(2, '0')}-${now.month.toString().padLeft(2, '0')}-${now.year} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
@@ -1169,7 +1391,8 @@ class _CashierDashboardState extends State<CashierDashboard> {
                 _receiptRow('Bill ID', billId),
                 _receiptRow('Cashier', widget.fullName),
                 _receiptRow('Date & Time', timeStr),
-                _receiptRow('Payment', 'Cash'),
+                _receiptRow('Payment', paymentMethod),
+                _receiptRow('Status', 'Paid ✅'),
                 const SizedBox(height: 8),
                 Container(
                   padding: const EdgeInsets.all(12),
@@ -1335,28 +1558,31 @@ class _CashierDashboardState extends State<CashierDashboard> {
   Widget build(BuildContext context) {
     final isWide = MediaQuery.of(context).size.width > 600;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF0FDFA),
-      appBar: _buildAppBar(),
-      body: Column(
-        children: [
-          _buildStatusBar(),
-          Expanded(
-            child: isWide
-                ? Row(
-                    children: [
-                      Expanded(flex: 3, child: _buildCameraPanel()),
-                      Expanded(flex: 2, child: _buildCartPanel()),
-                    ],
-                  )
-                : Column(
-                    children: [
-                      Expanded(flex: 5, child: _buildCameraPanel()),
-                      Expanded(flex: 2, child: _buildCartPanel()),
-                    ],
-                  ),
-          ),
-        ],
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF0FDFA),
+        appBar: _buildAppBar(),
+        body: Column(
+          children: [
+            _buildStatusBar(),
+            Expanded(
+              child: isWide
+                  ? Row(
+                      children: [
+                        Expanded(flex: 3, child: _buildCameraPanel()),
+                        Expanded(flex: 2, child: _buildCartPanel()),
+                      ],
+                    )
+                  : Column(
+                      children: [
+                        Expanded(flex: 5, child: _buildCameraPanel()),
+                        Expanded(flex: 2, child: _buildCartPanel()),
+                      ],
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1496,31 +1722,78 @@ class _CashierDashboardState extends State<CashierDashboard> {
                             fontSize: 13)),
                   ],
                 ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                          width: 6,
-                          height: 6,
-                          decoration: BoxDecoration(
-                              color: _cameraInitialized
-                                  ? const Color(0xFF4ADE80)
-                                  : Colors.orange,
-                              shape: BoxShape.circle)),
-                      const SizedBox(width: 4),
-                      Text(_cameraInitialized ? 'LIVE' : 'NO CAM',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold)),
-                    ],
-                  ),
+                Row(
+                  children: [
+                    // Tare button
+                    GestureDetector(
+                      onTap: () async {
+                        try {
+                          await http
+                              .post(Uri.parse('$_weightBase/weight/tare'))
+                              .timeout(const Duration(seconds: 3));
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Scale zeroed ✅'),
+                              backgroundColor: AppColors.success,
+                              behavior: SnackBarBehavior.floating,
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        } catch (_) {}
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: AppColors.gold.withOpacity(0.25),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                              color: AppColors.gold.withOpacity(0.5)),
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(Icons.exposure_zero,
+                                color: AppColors.gold, size: 13),
+                            SizedBox(width: 3),
+                            Text('Tare',
+                                style: TextStyle(
+                                    color: AppColors.gold,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Camera status pill
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                              width: 6,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                  color: _cameraInitialized
+                                      ? const Color(0xFF4ADE80)
+                                      : Colors.orange,
+                                  shape: BoxShape.circle)),
+                          const SizedBox(width: 4),
+                          Text(_cameraInitialized ? 'LIVE' : 'NO CAM',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -1742,7 +2015,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
                               child: Icon(
                                 item['is_weight']
                                     ? Icons.scale
-                                    : Icons.label_outline,
+                                    : Icons.inventory_2_rounded,
                                 color: item['is_weight']
                                     ? AppColors.gold
                                     : AppColors.primary,
@@ -1865,7 +2138,7 @@ class _CashierDashboardState extends State<CashierDashboard> {
                     const SizedBox(width: 6),
                     Expanded(
                       child: ElevatedButton(
-                        onPressed: _cartItems.isEmpty ? null : _generateBill,
+                        onPressed: _cartItems.isEmpty ? null : _showPaymentMethodDialog,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primary,
                           foregroundColor: Colors.white,
@@ -1885,6 +2158,166 @@ class _CashierDashboardState extends State<CashierDashboard> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── Barcode Scanner Screen ────────────────────────────────────────────────────
+class _BarcodeScannerScreen extends StatefulWidget {
+  final Function(String) onScanned;
+  const _BarcodeScannerScreen({required this.onScanned});
+
+  @override
+  State<_BarcodeScannerScreen> createState() => _BarcodeScannerScreenState();
+}
+
+class _BarcodeScannerScreenState extends State<_BarcodeScannerScreen> {
+  final MobileScannerController _controller = MobileScannerController(
+    detectionSpeed: DetectionSpeed.noDuplicates,
+    facing: CameraFacing.back,
+  );
+  bool _scanned = false;
+  bool _torchOn = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onDetect(BarcodeCapture capture) {
+    if (_scanned) return;
+    final code = capture.barcodes.firstOrNull?.rawValue;
+    if (code == null || code.isEmpty) return;
+    setState(() => _scanned = true);
+    Navigator.pop(context);
+    widget.onScanned(code);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text('Scan Barcode',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        actions: [
+          IconButton(
+            icon: Icon(
+              _torchOn ? Icons.flash_on : Icons.flash_off,
+              color: _torchOn ? AppColors.gold : Colors.white,
+            ),
+            onPressed: () {
+              _controller.toggleTorch();
+              setState(() => _torchOn = !_torchOn);
+            },
+          ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          // Camera feed
+          MobileScanner(
+            controller: _controller,
+            onDetect: _onDetect,
+          ),
+
+          // Scan frame overlay
+          Center(
+            child: Container(
+              width: 260,
+              height: 160,
+              decoration: BoxDecoration(
+                border: Border.all(color: AppColors.gold, width: 3),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Stack(
+                children: [
+                  // Corner accents
+                  Positioned(top: -1, left: -1, child: _corner()),
+                  Positioned(top: -1, right: -1,
+                      child: Transform.rotate(angle: 1.5708, child: _corner())),
+                  Positioned(bottom: -1, left: -1,
+                      child: Transform.rotate(angle: -1.5708, child: _corner())),
+                  Positioned(bottom: -1, right: -1,
+                      child: Transform.rotate(angle: 3.1416, child: _corner())),
+                ],
+              ),
+            ),
+          ),
+
+          // Instruction text
+          Positioned(
+            bottom: 80,
+            left: 0,
+            right: 0,
+            child: Column(
+              children: [
+                const Icon(Icons.qr_code_scanner, color: AppColors.gold, size: 28),
+                const SizedBox(height: 10),
+                const Text(
+                  'Point camera at product barcode',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Barcode will scan automatically',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      color: Colors.white.withOpacity(0.6), fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+
+          // Dark overlay outside scan frame
+          ColorFiltered(
+            colorFilter: ColorFilter.mode(
+                Colors.black.withOpacity(0.5), BlendMode.srcOut),
+            child: Stack(
+              children: [
+                Container(
+                    decoration: const BoxDecoration(
+                        color: Colors.black,
+                        backgroundBlendMode: BlendMode.dstOut)),
+                Center(
+                  child: Container(
+                    width: 260,
+                    height: 160,
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _corner() {
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: const BoxDecoration(
+        border: Border(
+          top: BorderSide(color: AppColors.gold, width: 4),
+          left: BorderSide(color: AppColors.gold, width: 4),
+        ),
       ),
     );
   }

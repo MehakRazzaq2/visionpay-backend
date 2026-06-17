@@ -1,34 +1,26 @@
+# Python
 venv/
-visionpay.db
 __pycache__/
 *.pyc
 *.pyo
 .env
-temp_*.jpg
-temp_*.jpeg
-temp_*.png
-runs/
-*.log
-.DS_Store
 
-# Model file — hosted on HF Model Hub
-*.pt
-*.pth
-
-# Large training data — not needed for deployment
-dataset/
-detection_results/
-detection_results2/
-models/
-
-# Test images in root
-*.jpg
-*.jpeg
-*.png
-*.mp4
-
-# Flutter build artifacts
+# Flutter build output
 visionpay_app/build/
 visionpay_app/.dart_tool/
 visionpay_app/.flutter-plugins
 visionpay_app/.flutter-plugins-dependencies
+
+# APK files
+*.apk
+*.aab
+
+# Claude internal
+.claude/
+
+# Database (runtime)
+visionpay.db
+
+# OS
+.DS_Store
+Thumbs.db
