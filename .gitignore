@@ -24,3 +24,13 @@ visionpay.db
 # OS
 .DS_Store
 Thumbs.db
+
+# Large training dataset — too big for GitHub (386 MB)
+dataset/
+
+# Model training run outputs
+runs/
+
+# Detection test dumps
+detection_results/
+detection_results2/

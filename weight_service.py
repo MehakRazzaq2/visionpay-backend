@@ -46,12 +46,24 @@ def _read_loop():
             _scale_connected = True
             while True:
                 line = _arduino_serial.readline().decode('utf-8', errors='ignore').strip()
+                if line:
+                    print(f"RAW: '{line}'")
+                # Support both: "WEIGHT:35.5" and "Weight: 35.5 g | Calibration: 420.00"
                 if line.startswith("WEIGHT:"):
                     try:
                         with _weight_lock:
-                            _weight_g = float(line.split(":")[1])
+                            _weight_g = float(line.split(":")[1].strip())
+                        print(f"✅ Parsed: {_weight_g}g")
                     except ValueError:
                         pass
+                elif line.startswith("Weight:"):
+                    try:
+                        value_str = line.split("|")[0].replace("Weight:", "").replace("g", "").strip()
+                        with _weight_lock:
+                            _weight_g = float(value_str)
+                        print(f"✅ Parsed: {_weight_g}g")
+                    except ValueError as e:
+                        print(f"❌ Parse error: {e}")
         except Exception as e:
             _scale_connected = False
             _arduino_serial = None
